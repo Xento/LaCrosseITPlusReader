@@ -35,4 +35,3 @@ void JeeLink::EnableLED(bool enabled) {
   }
 
 }
-

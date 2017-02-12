@@ -13,8 +13,15 @@ public:
     bool  NewBatteryFlag;
     bool  Bit12;
     float Temperature;
+    byte  Temperature10;
+    byte  Temperature1;
+    byte  Temperature01;
     bool  WeakBatteryFlag;
+    bool  SType;
     byte  Humidity;
+    byte  Humidity10;
+    byte  Humidity1;
+    byte  Humidity01;
     byte  CRC;
     bool  IsValid;
   };
@@ -22,16 +29,21 @@ public:
   static const byte FRAME_LENGTH = 5;
   static bool USE_OLD_ID_CALCULATION;
   static byte CalculateCRC(byte data[]);
-  static void EncodeFrame(struct LaCrosse::Frame *frame, byte bytes[FRAME_LENGTH]);
+  static void EncodeFrame(struct LaCrosse::Frame *frame, byte bytes[5]);
   static void DecodeFrame(byte *bytes, struct LaCrosse::Frame *frame);
-  static void AnalyzeFrame(byte *data, bool fOnlyIfValid = false);
-  static bool DisplayFrame(byte *data, struct Frame &frame, bool fOnlyIfValid = true);
-  static bool TryHandleData(byte *data, bool fFhemDisplay = true);
-  static String GetFhemDataString(struct LaCrosse::Frame *frame);
+  static void AnalyzeFrame(byte *data);
+  static bool TryHandleData(byte *data);
+  static String GetFhemDataString(byte *data);
+  static String GetHMSDataString(struct LaCrosse::Frame *frame);
+  static void SetHMSMode(boolean mode);
+  static bool m_HMSMode;      //FULB
+  static bool IsValidDataRate(unsigned long dataRate);
+  
+
+protected:
+  static String BuildFhemDataString(struct LaCrosse::Frame *frame);
 
 };
 
-
 #endif
-
 

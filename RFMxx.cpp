@@ -1,35 +1,22 @@
 #include "RFMxx.h"
-#include "SensorBase.h"
-#include "JeeLink.h"
-extern JeeLink jeeLink;
-#ifdef USE_SPI_H
-#include <SPI.h>
-#define m_miso MISO
-#define m_mosi MOSI
-#define m_sck SCK
-#define USE_SPI8_H
-#define USE_SPI16_H
-#endif
+
+// Usage with ESP8266: to use this lib with ESP8266, we need a: #define ESP8266 
+// This can be done in some IDEs like visual micro on the project level.
+// In Arduino IDE it's not possible.
+// In this case, uncomment the following line:
+//// #define ESP8266
 
 void RFMxx::Receive() {
   if (IsRF69) {
     if (ReadReg(REG_IRQFLAGS2) & RF_IRQFLAGS2_PAYLOADREADY) {
-      m_lastReceiveTime = millis();
-	  m_payloadPointer = 0;
       for (int i = 0; i < PAYLOADSIZE; i++) {
         byte bt = GetByteFromFifo();
-        m_payload_crc = SensorBase::UpdateCRC(m_payload_crc, bt);
         m_payload[i] = bt;
-		m_payloadPointer = i;
-        if (m_payloadPointer >= m_payload_min_size && m_payload_crc == 0) {
-			break;
-		}
       }
       m_payloadReady = true;
     }
   }
   else {
-#if 0
     bool hasData = false;
     digitalWrite(m_ss, LOW);
     asm("nop");
@@ -38,112 +25,29 @@ void RFMxx::Receive() {
       hasData = true;
     }
     digitalWrite(m_ss, HIGH);
-    if (hasData) {
-#else
-// RF12 status bits
-#define RF_FIFO_BIT     0x8000
-#define RF_POR_BIT      0x4000
-#define RF_LBD_BIT      0x0400
-#define RF_WDG_BIT      0x1000
-#define RF_OVF_BIT      0x2000
-#define RF_RSSI_BIT     0x0100
 
-	// try
-	bool hasData = digitalRead(m_irqPin) == 0;
-//	while ((digitalRead(m_irqPin) == 0) && !m_payloadReady) {{
-	while ((spi16(0) & RF_FIFO_BIT) && !m_payloadReady) {{
-#endif
-        byte bt = GetByteFromFifo();
-      m_payload[m_payloadPointer++] = bt;
+    if (hasData) {
+      m_payload[m_payloadPointer++] = GetByteFromFifo();
       m_lastReceiveTime = millis();
-      m_payload_crc = SensorBase::UpdateCRC(m_payload_crc, bt);
     }
 
-    if ((m_payloadPointer >= 8 && m_payload_crc == 0) || (m_payloadPointer > 0 && millis() > m_lastReceiveTime + 50) || m_payloadPointer >= 32) {
+    if ((m_payloadPointer > 0 && millis() > m_lastReceiveTime + 50) || m_payloadPointer >= 32) {
       m_payloadReady = true;
     }
   }
-#if 1
-}
-#endif
 }
 
-byte RFMxx::GetPayload(byte *data) {
-	byte payloadPointer = m_payloadPointer;
+void RFMxx::GetPayload(byte *data) {
   m_payloadReady = false;
   m_payloadPointer = 0;
-  m_payload_crc = 0;
   for (int i = 0; i < PAYLOADSIZE; i++) {
     data[i] = m_payload[i];
   }
-  return payloadPointer;
 }
 
-bool RFMxx::ReceiveGetPayloadWhenReady(byte *data, byte &length, byte &packetCount) {
-      byte payload[PAYLOADSIZE];
-      byte payLoadSize;
-//      byte packetCount;
-	bool fAgain = false;
-	bool fEnableReceiver = true;
-	unsigned long lastReceiveTime = 0;
-	byte count = 0;
-	byte len;
-	bool fPayloadIsReady = false;
-
-	do {
-		Receive();
-
-		if (PayloadIsReady()) {
-			payLoadSize = GetPayload(payload);
-			if (!fPayloadIsReady) {
-				  for (int i = 0; i < payLoadSize; i++) {
-					data[i] = payload[i];
-				  }
-				length = payLoadSize;
-				len = payLoadSize;
-				count++;
-				fPayloadIsReady = true;
-				fAgain = (payLoadSize < 16);
-			}
-			else if (payLoadSize >= len) { // WH1080 sends 6 repeated packages
-				int i;
-				  for (i = 0; i < len; i++) {
-					if (data[i] != payload[i]) {
-						break;
-					}
-				  }
-				  if (i >= len) {
-					count++; // matching packet count
-					fAgain = true;
-				  }
-			}
-			else {
-				fAgain = false;
-			}
-			packetCount = count;
-
-			if (fAgain) {
-				lastReceiveTime = millis();
-				fEnableReceiver = true;
-				EnableReceiver(fEnableReceiver, false);
-			}
-	  }
-	  else {
-		  fAgain = fAgain && (fPayloadIsReady) && (count < 8) && (millis() < lastReceiveTime + 50);
-	  }
-	} while (fAgain);
-
-	if (fEnableReceiver && fPayloadIsReady) {
-		fEnableReceiver = false;
-		EnableReceiver(fEnableReceiver);
-	}
-	return (fPayloadIsReady);
-}
 
 void RFMxx::SetDataRate(unsigned long dataRate) {
   m_dataRate = dataRate;
-  m_payload_max_size = 64;
-  m_payload_min_size = (m_dataRate == 17241) ? 10 : 8;
 
   if (IsRF69) {
     word r = ((32000000UL + (m_dataRate / 2)) / m_dataRate);
@@ -151,22 +55,11 @@ void RFMxx::SetDataRate(unsigned long dataRate) {
     WriteReg(0x04, r & 0xFF);
   }
   else {
-    byte bt;
-    if (m_dataRate == 17241) {
-      bt = 0x13;
-    }
-    else if (m_dataRate == 8621) {
-      bt = 0x28; // rinie see http://www.g-romahn.de/ws1600, https://github.com/rinie/weatherstationFSK/blob/master/weatherstationFSK.ino
-	}
-    else if (m_dataRate == 9579) {
-      bt = 0x23;
-    }
-    else {
-      bt = (byte)(344828UL / m_dataRate) - 1;
-    }
+    byte bt = (byte)(round(344828.0 / m_dataRate)) - 1;
     RFMxx::spi16(0xC600 | bt);
   }
 }
+
 
 void RFMxx::SetFrequency(unsigned long kHz) {
   m_frequency = kHz;
@@ -180,9 +73,10 @@ void RFMxx::SetFrequency(unsigned long kHz) {
   else {
     RFMxx::spi16(40960 + (m_frequency - 860000) / 5);
   }
+
 }
 
-void RFMxx::EnableReceiver(bool enable, bool fClearFifo){
+void RFMxx::EnableReceiver(bool enable){
   if (enable) {
     if (IsRF69) {
       WriteReg(REG_OPMODE, (ReadReg(REG_OPMODE) & 0xE3) | RF_OPMODE_RECEIVER);
@@ -201,9 +95,7 @@ void RFMxx::EnableReceiver(bool enable, bool fClearFifo){
       spi16(0x8208);
     }
   }
-  if (fClearFifo /* || IsRF69 */) {
-  	ClearFifo();
- }
+  ClearFifo();
 }
 
 void RFMxx::EnableTransmitter(bool enable){
@@ -234,7 +126,7 @@ bool RFMxx::PayloadIsReady() {
 }
 
 
-bool RFMxx::ClearFifo() {
+void RFMxx::ClearFifo() {
   if (IsRF69) {
     WriteReg(REG_IRQFLAGS2, 16);
   }
@@ -284,18 +176,18 @@ void RFMxx::InitialzeLaCrosse() {
     /* 0x6F */ WriteReg(REG_TESTDAGC, RF_DAGC_IMPROVED_LOWBETA0);
   }
   else {
-    spi16(0x8208);              // RX/TX off
-    spi16(0x80E8);              // 80e8 CONFIGURATION EL,EF,868 band,12.5pF  (iT+ 915  80f8)
-    spi16(0xC26a);              // DATA FILTER
-    spi16(0xCA12);              // FIFO AND RESET  8,SYNC,!ff,DR
-    spi16(0xCEd4);              // SYNCHRON PATTERN  0x2dd4
-    spi16(0xC481);              // AFC during VDI HIGH
-    spi16(0x94a0);              // RECEIVER CONTROL VDI Medium 134khz LNA max DRRSI 103 dbm
-    spi16(0xCC77);              //
-    spi16(0x9850);              // Deviation 90 kHz
-    spi16(0xE000);              //
-    spi16(0xC800);              //
-    spi16(0xC040);              // 1.66MHz,2.2V
+    spi16(0x8208);   // RX/TX off
+    spi16(0x80E8);   // 80e8 CONFIGURATION EL,EF,868 band,12.5pF  (iT+ 915  80f8)
+    spi16(0xC26a);   // DATA FILTER
+    spi16(0xCA12);   // FIFO AND RESET  8,SYNC,!ff,DR 
+    spi16(0xCEd4);   // SYNCHRON PATTERN  0x2dd4 
+    spi16(0xC481);   // AFC "Keep the F-Offset only during VDI=high" 
+    spi16(0x94a0);   // RECEIVER CONTROL VDI Medium 134khz LNA max DRRSI 103 dbm  
+    spi16(0xCC77);   // 
+    spi16(0x9850);   // 0x9850: Shift positive,  Deviation 90 kHz 
+    spi16(0xE000);   // 
+    spi16(0xC800);   // 
+    spi16(0xC040);   // 1.66MHz,2.2V 
   }
 
   SetFrequency(m_frequency);
@@ -304,132 +196,122 @@ void RFMxx::InitialzeLaCrosse() {
   ClearFifo();
 }
 
-byte RFMxx::GetTemperature() {
-  byte result = 0;
-  if (IsRF69) {
-    byte receiverWasOn = ReadReg(REG_OPMODE) & 0x10;
 
-    EnableReceiver(false);
-
-    WriteReg(0x4E, 0x08);
-    while ((ReadReg(0x4E) & 0x04));
-    result = ~ReadReg(0x4F) - 90;
-
-    if (receiverWasOn) {
-      EnableReceiver(true);
-    }
-  }
-
-  return result;
+void RFMxx::SetHFParameter(byte address, byte value) {
+  WriteReg(address, value);
+  Serial.print("WriteReg:");
+  Serial.print(address);
+  Serial.print("->");
+  Serial.print(value);
 }
 
+void RFMxx::SetHFParameter(unsigned short value) {
+  spi16(value);
+  Serial.print("spi16:");
+  Serial.print(value);
+}
+
+
+#ifndef ESP8266
 #define clrb(pin) (*portOutputRegister(digitalPinToPort(pin)) &= ~digitalPinToBitMask(pin))
 #define setb(pin) (*portOutputRegister(digitalPinToPort(pin)) |= digitalPinToBitMask(pin))
-#ifndef USE_SPI8_H
+#endif
+
 byte RFMxx::spi8(byte value) {
-  volatile byte *misoPort = portInputRegister(digitalPinToPort(m_miso));
-  byte misoBit = digitalPinToBitMask(m_miso);
   for (byte i = 8; i; i--) {
-    clrb(m_sck);
+    #ifndef ESP8266
+      clrb(m_sck);
+    #else
+      digitalWrite(m_sck, LOW);
+    #endif
     if (value & 0x80) {
-      setb(m_mosi);
+    #ifndef ESP8266
+        setb(m_mosi);
+      #else
+        digitalWrite(m_mosi, HIGH);
+      #endif
     }
     else {
-      clrb(m_mosi);
+      #ifndef ESP8266
+        clrb(m_mosi);
+      #else
+        digitalWrite(m_mosi, LOW);
+      #endif
     }
     value <<= 1;
-    setb(m_sck);
-    if (*misoPort & misoBit) {
+    #ifndef ESP8266
+      setb(m_sck);
+    #else
+      digitalWrite(m_sck, HIGH);
+    #endif
+    if (digitalRead(m_miso)) {
       value |= 1;
     }
   }
-  clrb(m_sck);
+  #ifndef ESP8266
+    clrb(m_sck);
+  #else
+    digitalWrite(m_sck, LOW);
+  #endif
 
   return value;
 }
-#else
-byte RFMxx::spi8(byte value) {
-  byte res;
-  SPI.beginTransaction(SPISettings(SPI_CLOCK_DIV4, MSBFIRST, SPI_MODE0));
-  digitalWrite(m_ss, LOW);
-  res = SPI.transfer(value);
-  digitalWrite(m_ss, HIGH);
-  SPI.endTransaction();
-  return res;
-}
 
-#endif
 
-#ifndef USE_SPI16_H
 unsigned short RFMxx::spi16(unsigned short value) {
-  volatile byte *misoPort = portInputRegister(digitalPinToPort(m_miso));
-  byte misoBit = digitalPinToBitMask(m_miso);
+  digitalWrite(m_ss, LOW);
 
-  clrb(m_ss);
   for (byte i = 0; i < 16; i++) {
     if (value & 32768) {
-      setb(m_mosi);
+    #ifndef ESP8266
+        setb(m_mosi);
+      #else
+        digitalWrite(m_mosi, HIGH);
+      #endif
     }
     else {
-      clrb(m_mosi);
+      #ifndef ESP8266
+        clrb(m_mosi);
+      #else
+        digitalWrite(m_mosi, LOW);
+      #endif
     }
     value <<= 1;
-    if (*misoPort & misoBit) {
+    if (digitalRead(m_miso)) {
       value |= 1;
     }
-    setb(m_sck);
-    asm("nop");
-    asm("nop");
-    clrb(m_sck);
+    #ifndef ESP8266
+      setb(m_sck);
+    #else
+      digitalWrite(m_sck, HIGH);
+    #endif
+    delayMicroseconds(1);
+    #ifndef ESP8266
+      clrb(m_sck);
+    #else
+      digitalWrite(m_sck, LOW);
+    #endif
   }
-  setb(m_ss);
+
+  digitalWrite(m_ss, HIGH);
   return value;
 }
-#else
-unsigned short RFMxx::spi16(unsigned short value) {
-  unsigned short res;
-  SPI.beginTransaction(SPISettings(SPI_CLOCK_DIV4, MSBFIRST, SPI_MODE0));
-  digitalWrite(m_ss, LOW);
-  res = SPI.transfer16(value);
-  digitalWrite(m_ss, HIGH);
-  SPI.endTransaction();
-  return res;
-}
-#endif
+
 
 byte RFMxx::ReadReg(byte addr) {
-#ifndef USE_SPI8_H
   digitalWrite(m_ss, LOW);
   spi8(addr & 0x7F);
   byte regval = spi8(0);
   digitalWrite(m_ss, HIGH);
   return regval;
-#else
-  SPI.beginTransaction(SPISettings(SPI_CLOCK_DIV4, MSBFIRST, SPI_MODE0));
-  digitalWrite(m_ss, LOW);
-  SPI.transfer(addr & 0x7F);
-  uint8_t regval = SPI.transfer(0);
-  digitalWrite(m_ss, HIGH);
-  SPI.endTransaction();
-  return regval;
-#endif
+
 }
 
 void RFMxx::WriteReg(byte addr, byte value) {
-#ifndef USE_SPI8_H
   digitalWrite(m_ss, LOW);
   spi8(addr | 0x80);
   spi8(value);
-
   digitalWrite(m_ss, HIGH);
-#else
-  SPI.beginTransaction(SPISettings(SPI_CLOCK_DIV4, MSBFIRST, SPI_MODE0));
-  digitalWrite(m_ss, LOW);
-  SPI.transfer(addr | 0x80);
-  SPI.transfer(value);
-  digitalWrite(m_ss, HIGH);
-  SPI.endTransaction();
-#endif
 }
 
 RFMxx::RadioType RFMxx::GetRadioType() {
@@ -438,60 +320,27 @@ RFMxx::RadioType RFMxx::GetRadioType() {
 
 String RFMxx::GetRadioName() {
   switch (GetRadioType()) {
-    case RFMxx::RFM12B:
-      return String("RFM12B");
-      break;
-    case RFMxx::RFM69CW:
-      return String("RFM69CW");
-      break;
-    default:
-      return String("None");
+  case RFMxx::RFM12B:
+    return String("RFM12");
+    break;
+  case RFMxx::RFM69CW:
+    return String("RFM69");
+    break;
+  default:
+    return String("None");
   }
 }
 
-void RFMxx::init() {
-#ifndef USE_SPI_H
-	  pinMode(m_mosi, OUTPUT);
-	  pinMode(m_miso, INPUT);
-	  pinMode(m_sck, OUTPUT);
-	  pinMode(m_ss, OUTPUT);
-	  pinMode(m_irq, INPUT);
-	  delay(10);
-
-	  digitalWrite(m_ss, HIGH);
-#else
-	  pinMode(m_irqPin, INPUT);
-	  pinMode(m_ss, OUTPUT);
-	  delay(10);
-	  digitalWrite(m_ss, HIGH);
-#if 0
-	  SPI.setDataMode(SPI_MODE0);
-	  SPI.setBitOrder(MSBFIRST);
-	  SPI.setClockDivider(SPI_CLOCK_DIV4); // decided to slow down from DIV2 after SPI stalling in some instances, especially visible on mega1284p when RFM69 and FLASH chip both present
-#endif
-	  SPI.begin();
-#endif
-	  m_radioType = RFMxx::RFM12B;
-	  WriteReg(REG_PAYLOADLENGTH, 0xA);
-	  if (ReadReg(REG_PAYLOADLENGTH) == 0xA) {
-	    WriteReg(REG_PAYLOADLENGTH, 0x40);
-	    if (ReadReg(REG_PAYLOADLENGTH) == 0x40) {
-	      m_radioType = RFMxx::RFM69CW;
-	    }
-	  }
+bool RFMxx::IsConnected() {
+  return m_radioType != RFMxx::None;
 }
 
-#ifndef USE_SPI_H
-RFMxx::RFMxx(byte mosi, byte miso, byte sck, byte ss, byte irq) {
+RFMxx::RFMxx(byte mosi, byte miso, byte sck, byte ss, byte irq, bool isPrimary) {
   m_mosi = mosi;
   m_miso = miso;
   m_sck = sck;
-  m_irq = irq;
-#else
-RFMxx::RFMxx(byte ss, byte irqPin) {
-  m_irqPin = irqPin;
-#endif
   m_ss = ss;
+  m_irq = irq;
 
   m_debug = false;
   m_dataRate = 17241;
@@ -499,10 +348,54 @@ RFMxx::RFMxx(byte ss, byte irqPin) {
   m_payloadPointer = 0;
   m_lastReceiveTime = 0;
   m_payloadReady = false;
-  m_payload_crc = 0;
-#ifndef USE_SPI_H
-	init();
-#endif
+
+
+  pinMode(m_mosi, OUTPUT);
+  pinMode(m_miso, INPUT);
+  pinMode(m_sck, OUTPUT);
+  pinMode(m_ss, OUTPUT);
+
+  digitalWrite(m_ss, HIGH);
+
+  // No radio found until now
+  m_radioType = RFMxx::None;
+
+  // Is there a RFM69 ?
+  WriteReg(REG_PAYLOADLENGTH, 0xA);
+  if (ReadReg(REG_PAYLOADLENGTH) == 0xA) {
+    WriteReg(REG_PAYLOADLENGTH, 0x40);
+    if (ReadReg(REG_PAYLOADLENGTH) == 0x40) {
+      m_radioType = RFMxx::RFM69CW;
+    }
+  }
+
+  // Is there a RFM12 ?
+  if (m_radioType == RFMxx::None) {
+    if (isPrimary) {
+      m_radioType = RFMxx::RFM12B;
+    }
+    else {
+      spi16(0x820C); // Osc. + LBD
+      for (int i = 0; i < 1000; i++) {
+        asm("nop");
+      }
+
+      spi16(0xC04F); // LBD=3.7V
+      for (int i = 0; i < 1000; i++) {
+        asm("nop");
+      }
+      if ((spi16(0x0000) & 0x0400) == 0x0400) {
+        spi16(0xC040);  // LBD = 2.2V
+        for (int i = 0; i < 1000; i++) {
+          asm("nop");
+        }
+
+        if ((spi16(0x0000) & 0x0400) == 0) {
+          m_radioType = RFMxx::RFM12B;
+        }
+      }
+    }
+  }
 
 }
 
@@ -523,7 +416,7 @@ void RFMxx::SendByte(byte data) {
 
 
 void RFMxx::SendArray(byte *data, byte length) {
-if (IsRF69) {
+  if (IsRF69) {
     WriteReg(REG_PACKETCONFIG2, (ReadReg(REG_PACKETCONFIG2) & 0xFB) | RF_PACKET2_RXRESTART); // avoid RX deadlocks
 
     EnableReceiver(false);
@@ -578,6 +471,4 @@ if (IsRF69) {
     Serial.println();
   }
 }
-
-
 

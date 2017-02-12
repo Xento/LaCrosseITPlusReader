@@ -24,11 +24,16 @@
 */
 
 bool LaCrosse::USE_OLD_ID_CALCULATION = false;
+bool LaCrosse::m_HMSMode = false;                //FULB
 
 byte LaCrosse::CalculateCRC(byte data[]) {
   return SensorBase::CalculateCRC(data, FRAME_LENGTH - 1);
 }
 
+                                                  // FULB
+void LaCrosse::SetHMSMode(boolean mode) {
+  m_HMSMode = mode;
+}
 
 void LaCrosse::EncodeFrame(struct Frame *frame, byte bytes[5]) {
   for (int i = 0; i < 5; i++) { bytes[i] = 0; }
@@ -48,7 +53,7 @@ void LaCrosse::EncodeFrame(struct Frame *frame, byte bytes[5]) {
   float temp = frame->Temperature + 40.0;
   bytes[1] |= (int)(temp / 10);
   bytes[2] |= ((int)temp % 10) << 4;
-  bytes[2] |= (int)(fmod(temp, 1) * 10 + 0.5);
+  bytes[2] |= (int)((int)(temp * 10) % 10);
 
   // Humidity
   bytes[3] = frame->Humidity;
@@ -58,7 +63,7 @@ void LaCrosse::EncodeFrame(struct Frame *frame, byte bytes[5]) {
 
   // CRC
   bytes[4] = CalculateCRC(bytes);
-
+  
 }
 
 
@@ -105,18 +110,123 @@ void LaCrosse::DecodeFrame(byte *bytes, struct Frame *frame) {
   t -= 40;
   frame->Temperature = t;
 
+  t = t * 10;
+  if (t < 0)
+  {
+  t *= -1;
+  }
+  //Temperatur in einzelne Zahlen aufteilen
+  frame->Temperature01  = int(t) % 10;
+  t /= 10;
+  frame->Temperature1   = int(t) % 10;
+  t /= 10;
+  frame->Temperature10  = int(t) % 10;
+
   frame->WeakBatteryFlag = (bytes[3] & 0x80) >> 7;
 
   frame->Humidity = bytes[3] & 0b01111111;
+
+  // FULB .. Feuchte in Zahlen zerlegen Tempsensor abfangen
+  if (frame->Humidity == 106)
+  {
+  frame->Humidity01  = 0;
+  frame->Humidity1   = 0;
+  frame->Humidity10  = 0;
+  frame->SType = 1;
+  }
+  else
+  {
+  float h = frame->Humidity;
+  frame->Humidity1  = int(h) % 10;
+  h /=10;
+  frame->Humidity10 = int(h) % 10;
+  frame->Humidity01 = 0;
+  frame->SType = 0;
+  }
 }
 
+String LaCrosse::GetHMSDataString(struct Frame *frame) {
+  
+  #define HMS_SENSOR_TEMP            1
+  #define HMS_SENSOR_TEMP_FEUCHTE    0
+  #define NEAGTIVE_TEMP              8
+  #define WEAKBATT                   2
+  
+  String pBufHM="";               // String fuer  HMS100TH  
+  unsigned char  latch=0;
+  String flag="";
+  pBufHM += "H00";                // Entry
+  if(frame->ID < 10) {
+    pBufHM += "0";
+    pBufHM += frame->ID;
+  }
+  else 
+    pBufHM += frame->ID;            // Add ID high byte
+    
+  if (frame->Temperature < 0)     //Add Sign of Temperature...
+  {
+    latch=(unsigned char)NEAGTIVE_TEMP;
+  }
+  else 
+  {
+    latch= 0;   
+  }
+  if(frame->WeakBatteryFlag)       // ... and weak battery flag
+  {
+     //add flag for weak battery
+     latch+=2;
+  }
+  if(frame->NewBatteryFlag)       // ... and new battery flag
+  {
+     //add flag for weak battery
+     latch+=4;
+  }
+  // it must be a String ...
+  switch (latch){
+  case 0:
+  flag = "0";
+  break;
+  case 2:
+  flag = "2";
+  break;
+  case 4:
+  flag = "4";
+  break;
+  case 6:
+  flag = "6";
+  break;
+  case 8:
+  flag = "8";
+  break;
+  case 10:
+  flag = "A";
+  break;
+  case 12:
+  flag = "C";
+  break;
+  case 14:
+  flag = "E";
+  break;
+  }
+  
+  pBufHM += flag;                  // Ergebniss von oben 
+  pBufHM += frame->SType;          //Add Sensortype 0== HMS100TF, 1==HMS100T
+  pBufHM += frame->Temperature1; 
+  pBufHM += frame->Temperature01;
+  pBufHM += frame->Humidity01;
+  pBufHM += frame->Temperature10;
+  pBufHM += frame->Humidity10;
+  pBufHM += frame->Humidity1;  
 
-String LaCrosse::GetFhemDataString(struct Frame *frame) {
+  return pBufHM;
+  }
+
+String LaCrosse::BuildFhemDataString(struct Frame *frame) {
   // Format
   //
   // OK 9 56 1   4   156 37     ID = 56  T: 18.0  H: 37  no NewBatt
   // OK 9 49 1   4   182 54     ID = 49  T: 20.6  H: 54  no NewBatt
-  // OK 9 55 129 4 192 56       ID = 55  T: 21.6  H: 56  WITH NewBatt
+  // OK 9 55 129 4 192 56       ID = 55  T: 21.6  H: 56  WITH NewBatt 
   // OK 9 ID XXX XXX XXX XXX
   // |  | |  |   |   |   |
   // |  | |  |   |   |   --- Humidity incl. WeakBatteryFlag
@@ -170,7 +280,10 @@ String LaCrosse::GetFhemDataString(struct Frame *frame) {
   return pBuf;
 }
 
-bool LaCrosse::DisplayFrame(byte *data, struct Frame &frame, bool fOnlyIfValid) {
+void LaCrosse::AnalyzeFrame(byte *data) {
+  struct Frame frame;
+  DecodeFrame(data, &frame);
+
   byte filter[5];
   filter[0] = 0;
   filter[1] = 0;
@@ -186,16 +299,30 @@ bool LaCrosse::DisplayFrame(byte *data, struct Frame &frame, bool fOnlyIfValid) 
     }
   }
 
-  if (!hideIt && fOnlyIfValid && !frame.IsValid) {
-	  hideIt = true;
-  }
-
   if (!hideIt) {
-    // MilliSeconds, raw data and crc ok
+    // MilliSeconds
     static unsigned long lastMillis;
-    SensorBase::DisplayFrame(lastMillis, "LaCrosse", frame.IsValid, data, FRAME_LENGTH);
+    unsigned long now = millis();
+    char div[16];
+    sprintf(div, "%06d ", now - lastMillis);
+    lastMillis = millis();
+    Serial.print(div);
 
-    if (frame.IsValid) {
+    // Show the raw data bytes
+    Serial.print("LaCrosse [");
+    for (int i = 0; i < FRAME_LENGTH; i++) {
+      Serial.print(data[i], HEX);
+      Serial.print(" ");
+    }
+    Serial.print("]");
+
+    // Check CRC
+    if (!frame.IsValid) {
+      Serial.print(" CRC:WRONG");
+    }
+    else {
+      Serial.print(" CRC:OK");
+
       // Start
       Serial.print(" S:");
       Serial.print(frame.Header, DEC);
@@ -231,32 +358,38 @@ bool LaCrosse::DisplayFrame(byte *data, struct Frame &frame, bool fOnlyIfValid) 
 
     Serial.println();
   }
-  return !hideIt;
+
 }
 
-void LaCrosse::AnalyzeFrame(byte *data, bool fOnlyIfValid) {
-  struct Frame frame;
-  DecodeFrame(data, &frame);
-  DisplayFrame(data, frame, fOnlyIfValid);
-}
+String LaCrosse::GetFhemDataString(byte *data) {
+  String fhemString = "";
 
-bool LaCrosse::TryHandleData(byte *data, bool fFhemDisplay) {
   if ((data[0] & 0xF0) >> 4 == 9) {
     struct Frame frame;
     DecodeFrame(data, &frame);
     if (frame.IsValid) {
-	  if (fFhemDisplay) {
-          String fhemString = "";
-          fhemString = GetFhemDataString(&frame);
-          if (fhemString.length() > 0) {
-            Serial.println(fhemString);
-          }
-          return fhemString.length() > 0;
-  	     }
-  	     else {
-		     return DisplayFrame(data, frame);
-	     }
+      if(m_HMSMode)
+        fhemString = GetHMSDataString(&frame);
+      else
+        fhemString = BuildFhemDataString(&frame);
     }
   }
-  return false;
+
+  return fhemString;
+}
+
+#define HMS    //switches between HMS and FHEM-Code
+bool LaCrosse::TryHandleData(byte *data) {
+  String fhemString = GetFhemDataString(data);
+
+  if (fhemString.length() > 0) {
+    Serial.println(fhemString);
+  }
+
+  return fhemString.length() > 0;
+}
+
+
+bool LaCrosse::IsValidDataRate(unsigned long dataRate) {
+  return dataRate == 17241ul || dataRate == 9579ul;
 }

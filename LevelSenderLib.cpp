@@ -9,18 +9,18 @@
 //  |  | |  |  |  | |  |  |  | |  |  |  | |  |  |  | |  |  `--------- CRC
 //  |  | |  |  |  | |  |  |  | |  |  |  | |  |  |  | |  |
 //  |  | |  |  |  | |  |  |  | |  |  |  | |  |  |  | `----- Voltage * 0.1V
-//  |  | |  |  |  | |  |  |  | |  |  |  | |  |  `---------- Voltage * 1V
+//  |  | |  |  |  | |  |  |  | |  |  |  | |  |  `---------- Voltage * 1V 
 //  |  | |  |  |  | |  |  |  | |  |  |  | |  |
 //  |  | |  |  |  | |  |  |  | |  |  |  | `----- Temperature T *  0.1  \
-//  |  | |  |  |  | |  |  |  | |  |  `---------- Temperature T *  1    |  +40 Â°C
+//  |  | |  |  |  | |  |  |  | |  |  `---------- Temperature T *  1    |  +40 °C
 //  |  | |  |  |  | |  |  |  | `---------------- Temperature T * 10    /
-//  |  | |  |  |  | |  |  |  |
+//  |  | |  |  |  | |  |  |  | 
 //  |  | |  |  |  | |  |  `----- Level *   1  \
 //  |  | |  |  |  | `----------- Level *  10  |  0,5cm steps
 //  |  | |  |  `---------------- Level * 100  /
 //  |  | |  |
 //  |  | `----- ID (0 .. 15)
-//  |  |
+//  |  | 
 //  `----- START (IT+=9, LevelSender=11)
 
 
@@ -81,7 +81,7 @@ void LevelSenderLib::DecodeFrame(byte *data, struct Frame *frame){
     }
   }
 }
-
+  
 void LevelSenderLib::EncodeFrame(struct Frame *frame, byte *bytes) {
   // SSSS.DDDD  LLLL.LLLL  LLLL.TTTT  TTTT.TTTT  VVVV.VVVV  CCCC.CCCC
   for (int i = 0; i < FRAME_LENGTH; i++) { bytes[i] = 0; }
@@ -94,31 +94,49 @@ void LevelSenderLib::EncodeFrame(struct Frame *frame, byte *bytes) {
   float levelSteps = frame->Level / 0.5;
   bytes[1] |= ((int)(levelSteps / 100)) << 4;
   bytes[1] |= ((int)levelSteps % 100) / 10;
-  bytes[2] |= ((int)fmod(((int)levelSteps % 100) % 10, 10)) << 4;
+  bytes[2] |= ((int)((int)(levelSteps * 100) % 100)) << 4;
 
   // Temperature
   float temp = frame->Temperature + 40.0;
   bytes[2] |= (int)(temp / 10);
   bytes[3] |= ((int)temp % 10) << 4;
-  bytes[3] |= (int)(fmod(temp, 1) * 10 + 0.5);
+  bytes[3] |= (int)((int)(temp * 10) % 10);
 
   // Voltage
   bytes[4] |= ((int)frame->Voltage % 10) << 4;
-  bytes[4] |= (int)(fmod(frame->Voltage, 1) * 10 + 0.5);
+  bytes[4] |= (int)((int)(frame->Voltage * 10) % 10);
 
   // CRC
   bytes[FRAME_LENGTH - 1] = CalculateCRC(bytes);
 }
 
-bool LevelSenderLib::DisplayFrame(byte *data, struct Frame &frame, bool fOnlyIfValid) {
-  if (fOnlyIfValid && !frame.IsValid) {
-	  return frame.IsValid;
-  }
-  // MilliSeconds, raw data and crc ok
-  static unsigned long lastMillis;
-  SensorBase::DisplayFrame(lastMillis, "LevelSender", frame.IsValid, data, FRAME_LENGTH);
+void LevelSenderLib::AnalyzeFrame(byte *data) {
+  struct Frame frame;
+  DecodeFrame(data, &frame);
 
-  if (frame.IsValid) {
+  // MilliSeconds
+  static unsigned long lastMillis;
+  unsigned long now = millis();
+  char div[16];
+  sprintf(div, "%06d ", now - lastMillis);
+  lastMillis = millis();
+  Serial.print(div);
+
+  // Show the raw data bytes
+  Serial.print("LevelSender [");
+  for (int i = 0; i < FRAME_LENGTH; i++) {
+    Serial.print(data[i], HEX);
+    Serial.print(" ");
+  }
+  Serial.print("]");
+
+  // Check CRC
+  if (!frame.IsValid) {
+    Serial.print(" CRC:WRONG");
+  }
+  else {
+    Serial.print(" CRC:OK");
+
     // Start
     Serial.print(" S:");
     Serial.print(frame.Header, DEC);
@@ -145,13 +163,7 @@ bool LevelSenderLib::DisplayFrame(byte *data, struct Frame &frame, bool fOnlyIfV
   }
 
   Serial.println();
-  return frame.IsValid;
-}
 
-void LevelSenderLib::AnalyzeFrame(byte *data, bool fOnlyIfValid) {
-  struct Frame frame;
-  DecodeFrame(data, &frame);
-  DisplayFrame(data, frame, fOnlyIfValid);
 }
 
 
@@ -160,11 +172,11 @@ byte LevelSenderLib::CalculateCRC(byte data[]) {
 }
 
 
-String LevelSenderLib::GetFhemDataString(struct Frame *frame) {
+String LevelSenderLib::BuildFhemDataString(struct Frame *frame) {
   // Format
-  //
-  // OK LS 1  0   5   100 4   191 60      =  38,0cm    21,5Â°C   6,0V
-  // OK LS 1  0   8   167 4   251 57      = 121,5cm    27,5Â°C   5,7V
+  // 
+  // OK LS 1  0   5   100 4   191 60      =  38,0cm    21,5°C   6,0V
+  // OK LS 1  0   8   167 4   251 57      = 121,5cm    27,5°C   5,7V   
   // OK LS ID X   XXX XXX XXX XXX XXX
   // |   | |  |    |   |   |   |   |
   // |   | |  |    |   |   |   |   `--- Voltage * 10
@@ -202,21 +214,28 @@ String LevelSenderLib::GetFhemDataString(struct Frame *frame) {
   return result;
 }
 
-bool LevelSenderLib::TryHandleData(byte *data, bool fFhemDisplay) {
+String LevelSenderLib::GetFhemDataString(byte *data) {
+  String fhemString = "";
+
   struct Frame frame;
   DecodeFrame(data, &frame);
-    if (frame.IsValid) {
-	  if (fFhemDisplay) {
-          String fhemString = "";
-          fhemString = GetFhemDataString(&frame);
-          if (fhemString.length() > 0) {
-            Serial.println(fhemString);
-          }
-          return fhemString.length() > 0;
-  	     }
-  	     else {
-		     return DisplayFrame(data, frame);
-	     }
-    }
-  return false;
+  if (frame.IsValid) {
+    fhemString = BuildFhemDataString(&frame);
+  }
+
+  return fhemString;
+}
+
+bool LevelSenderLib::TryHandleData(byte *data) {
+  String fhemString = GetFhemDataString(data);
+
+  if (fhemString.length() > 0) {
+    Serial.println(fhemString);
+  }
+
+  return fhemString.length() > 0;
+}
+
+bool LevelSenderLib::IsValidDataRate(unsigned long dataRate) {
+  return dataRate == 8842ul || dataRate == 9579ul || dataRate == 17241ul;
 }

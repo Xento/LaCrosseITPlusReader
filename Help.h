@@ -3,6 +3,10 @@
 #ifndef _HELP_h
 #define _HELP_h
 
+//#define NOHELP
+
+#ifndef NOHELP
+
 #include "Arduino.h"
 
 class Help {
@@ -14,4 +18,5 @@ class Help {
 
 #endif
 
+#endif
 

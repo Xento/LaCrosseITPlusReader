@@ -2,8 +2,7 @@
 #define _RFMXX_h
 
 #include "Arduino.h"
-#define USE_SPI_H
-#define USE_TIME_H
+
 #define PAYLOADSIZE 64
 #define IsRF69 m_radioType == RFM69CW
 
@@ -11,25 +10,23 @@
 class RFMxx {
 public:
   enum RadioType {
+    None = 0,
     RFM12B = 1,
     RFM69CW = 2
   };
 
-#ifndef USE_SPI_H
-  RFMxx(byte mosi, byte miso, byte sck, byte ss, byte irq);
-#else
-  RFMxx(byte ss=SS, byte irqPin=2); // jeelink en moteino irq 0 / irqPin =2
-#endif
-  void init();
+  RFMxx(byte mosi, byte miso, byte sck, byte ss, byte irq, bool isPrimary = true);
+
+  bool IsConnected();
   bool PayloadIsReady();
-  byte GetPayload(byte *data);
+  void GetPayload(byte *data);
   void InitialzeLaCrosse();
   void SendArray(byte *data, byte length);
   void SetDataRate(unsigned long dataRate);
   unsigned long GetDataRate();
   void SetFrequency(unsigned long kHz);
   unsigned long GetFrequency();
-  void EnableReceiver(bool enable, bool fClearFifo = true);
+  void EnableReceiver(bool enable);
   void EnableTransmitter(bool enable);
   static byte CalculateCRC(byte data[], int len);
   void PowerDown();
@@ -38,32 +35,28 @@ public:
   RadioType GetRadioType();
   String GetRadioName();
   void Receive();
-  bool ReceiveGetPayloadWhenReady(byte *data, byte &length, byte &packetCount);
+  void SetHFParameter(byte address, byte value);
+  void SetHFParameter(unsigned short value);
+
+
 private:
   RadioType m_radioType;
-#ifndef USE_SPI_H
   byte m_mosi, m_miso, m_sck, m_ss, m_irq;
-#else
-  byte m_ss, m_irqPin;
-#endif
   bool m_debug;
   unsigned long m_dataRate;
   unsigned long m_frequency;
   byte m_payloadPointer;
   unsigned long m_lastReceiveTime;
   bool m_payloadReady;
-  byte m_payload_min_size;
-  byte m_payload_max_size;
-  byte m_payload_crc;
   byte m_payload[PAYLOADSIZE];
-
   byte spi8(byte);
   unsigned short spi16(unsigned short value);
   byte ReadReg(byte addr);
   void WriteReg(byte addr, byte value);
   byte GetByteFromFifo();
-  bool ClearFifo();
+  void ClearFifo();
   void SendByte(byte data);
+  void SetPin(byte port, bool highLow);
 
 };
 
@@ -1106,5 +1099,4 @@ private:
 #define RF_DAGC_IMPROVED_LOWBETA0   0x30  // Recommended default
 
 #endif
-
 

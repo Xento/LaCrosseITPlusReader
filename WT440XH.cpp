@@ -39,25 +39,30 @@ void WT440XH::DecodeFrame(byte *bytes, struct LaCrosse::Frame *frame) {
 }
 
 
-bool WT440XH::TryHandleData(byte *data, bool fFhemDisplay) {
+String WT440XH::GetFhemDataString(byte *data) {
+  String fhemString = "";
+
   if (data[0] == 0x51) {
     struct Frame frame;
     DecodeFrame(data, &frame);
     if (frame.IsValid) {
-	  if (fFhemDisplay) {
-          String fhemString = "";
-          fhemString = GetFhemDataString(&frame);
-          if (fhemString.length() > 0) {
-            Serial.println(fhemString);
-          }
-          return fhemString.length() > 0;
-  	     }
-  	     else {
-		     return DisplayFrame(data, frame);
-	     }
+      fhemString = BuildFhemDataString(&frame);
     }
+
   }
-  return false;
+
+  return fhemString;
+}
+
+bool WT440XH::TryHandleData(byte *data) {
+  String fhemString = GetFhemDataString(data);
+
+  if (fhemString.length() > 0) {
+    Serial.println(fhemString);
+  }
+
+  return fhemString.length() > 0;
+
 }
 
 bool WT440XH::CrcIsValid(byte *data) {
@@ -68,5 +73,4 @@ bool WT440XH::CrcIsValid(byte *data) {
 
   return crc == 0;
 }
-
 
